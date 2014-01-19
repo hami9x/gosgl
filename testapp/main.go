@@ -8,7 +8,6 @@ import (
 
 	gl "github.com/go-gl/gl"
 	glfw "github.com/go-gl/glfw3"
-	glh "github.com/go-gl/glh"
 	sgl "github.com/phaikawl/gosgl"
 )
 
@@ -27,47 +26,22 @@ func main() {
 		}
 		defer glfw.Terminate()
 
-		window, err := glfw.CreateWindow(640, 480, "Testing", nil, nil)
+		w, h := 400, 300
+		window, err := glfw.CreateWindow(w, h, "Testing", nil, nil)
 		if err != nil {
 			panic(err)
 		}
 
 		window.MakeContextCurrent()
 		gl.Init()
-		vao := gl.GenVertexArray()
-		vao.Bind()
-
-		vbo := gl.GenBuffer()
-		vbo.Bind(gl.ARRAY_BUFFER)
-		vertices := []float32{
-			0.0, 0.5, 0.0, 0.0,
-			0.5, -0.5, 0.5, 0.0,
-			-0.8, -0.5, 1.0, 1.0,
-		}
-		gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, vertices, gl.STATIC_DRAW)
-
-		vsh := sgl.ShaderFromFile(gl.VERTEX_SHADER, "vshader.glsl")
-		fsh := sgl.ShaderFromFile(gl.FRAGMENT_SHADER, "fshader.glsl")
-
-		program := glh.NewProgram(vsh, fsh)
-		program.BindFragDataLocation(0, "outColor")
-		program.Use()
-
-		posAttr := program.GetAttribLocation("position")
-		posAttr.AttribPointer(2, gl.FLOAT, false, 4*4, uintptr(0))
-		posAttr.EnableArray()
-
-		texAttr := program.GetAttribLocation("texcoord")
-		texAttr.AttribPointer(2, gl.FLOAT, false, 4*4, uintptr(8))
-		texAttr.EnableArray()
-
-		tex := glh.NewTexture(1, 1)
-		tex.Init()
+		sgl.Init()
+		canv := sgl.MakeCanvas(w, h)
+		c := sgl.MakeQuadraticCurve(50, 50, 300, 0, 400, 300)
 
 		gl.ClearColor(0, 0, 0, 1)
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 		for !window.ShouldClose() {
-			gl.DrawArrays(gl.TRIANGLES, 0, 3)
+			c.Draw(canv)
 			//Do OpenGL stuff
 			window.SwapBuffers()
 			glfw.PollEvents()
