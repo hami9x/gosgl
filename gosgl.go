@@ -8,13 +8,14 @@ import (
 	"io/ioutil"
 	"path"
 	"runtime"
-	"github.com/Jragonmiris/mathgl"
-	"github.com/phaikawl/poly2tri-go/p2t"
 
+	"github.com/Jragonmiris/mathgl"
 	"github.com/go-gl/gl"
 	"github.com/go-gl/glh"
+	"github.com/phaikawl/poly2tri-go/p2t"
 )
 
+//Drawer represents a program and its buffers
 type Drawer struct {
 	program gl.Program
 	vao     gl.VertexArray
@@ -34,6 +35,14 @@ var (
 	gTriangleDrawer           *Drawer
 	gQuadraticApproxPrecision float32 = 10
 )
+
+func lastPt(l []image.Point) image.Point {
+	return l[len(l)-1]
+}
+
+func Pt(x, y int) image.Point {
+	return image.Point{x, y}
+}
 
 func NewDrawer(vshader, fshader string) *Drawer {
 	vao := gl.GenVertexArray()
@@ -93,6 +102,7 @@ func Init() {
 
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 	gl.Enable(gl.BLEND)
+	gl.Enable(gl.STENCIL_TEST)
 }
 
 func Point(x, y int) image.Point {
@@ -130,37 +140,75 @@ func (p *Path) EndPoint() image.Point {
 	return p.endPoints.Back().Value.(image.Point)
 }
 
-func (p *Path) NewEnd(x, y int) {
+func (p *Path) NewEnd(pt image.Point) {
 	if p.endPoints == nil {
 		p.endPoints = new(list.List)
 	}
-	p.endPoints.PushBack(image.Point{x, y})
+	p.endPoints.PushBack(pt)
 }
 
-func (p *Path) StartAt(x, y int) *Path {
-	p.NewEnd(x, y)
+func (p *Path) StartAt(pt image.Point) *Path {
+	p.NewEnd(pt)
 	return p
 }
 
-func (p *Path) QuadraticTo(x, y, cx, cy int) *Path {
-	ex, ey := XY(p.EndPoint())
+func (p *Path) QuadraticTo(p2, c image.Point) *Path {
 	p.Segs.PushBack(MakeQuadraticCurve(
-		ex, ey,
-		cx, cy, x, y))
-	p.NewEnd(x, y)
+		p.EndPoint(),
+		c, p2))
+	p.NewEnd(p2)
 	return p
 }
 
-func (p *Path) BezierTo(x, y, c1x, c1y, c2x, c2y int) *Path {
-	ex, ey := XY(p.EndPoint())
+func (p *Path) BezierTo(p2, c1, c2 image.Point) *Path {
 	p.Segs.PushBack(MakeBezierCurve(
-		ex, ey,
-		c1x, c1y, c2x, c2y, x, y))
-	p.NewEnd(x, y)
+		p.EndPoint(),
+		c1, c2, p2))
+	p.NewEnd(p2)
 	return p
+}
+
+func fill(canv Canvas) {
+	gTriangleDrawer.activate()
+	gl.ColorMask(true, true, true, true)
+	gl.StencilFunc(gl.EQUAL, 1, 0xff)
+	w, h := canv.W, canv.H
+	p := canv.toGLPoints([]image.Point{
+		Pt(0, 0),
+		Pt(w, 0),
+		Pt(w, h),
+		Pt(0, h),
+	})
+	vertices := []float32{
+		p[0].X, p[0].Y,
+		p[1].X, p[1].Y,
+		p[3].X, p[3].Y,
+	}
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, vertices, gl.STATIC_DRAW)
+	gl.DrawArrays(gl.TRIANGLES, 0, 3)
+
+	vertices = []float32{
+		p[1].X, p[1].Y,
+		p[2].X, p[2].Y,
+		p[3].X, p[3].Y,
+	}
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, vertices, gl.STATIC_DRAW)
+	gl.DrawArrays(gl.TRIANGLES, 0, 3)
 }
 
 func (p *Path) Draw(canv Canvas) {
+	gl.ClearStencil(0)
+	gl.Clear(gl.STENCIL_BUFFER_BIT)
+	gl.StencilMask(0x01)
+	gl.StencilFunc(gl.ALWAYS, 0, 0xff)
+	gl.StencilOp(gl.KEEP, gl.KEEP, gl.INVERT)
+	gl.ColorMask(false, false, false, false)
+
+	p.draw(canv)
+	fill(canv)
+}
+
+func (p *Path) draw(canv Canvas) {
 	for e := p.Segs.Front(); e != nil; e = e.Next() {
 		e.Value.(PathSegment).Draw(canv)
 	}
@@ -194,13 +242,9 @@ func (p *Path) Draw(canv Canvas) {
 	}
 }
 
-func MakeQuadraticCurve(x1, y1, x2, y2, x3, y3 int) QuadraticCurve {
+func MakeQuadraticCurve(p1, c, p2 image.Point) QuadraticCurve {
 	return QuadraticCurve{
-		Points: [3]image.Point{
-			image.Point{x1, y1},
-			image.Point{x2, y2},
-			image.Point{x3, y3},
-		},
+		Points: [3]image.Point{p1, c, p2},
 	}
 }
 
@@ -218,14 +262,9 @@ func makeQuadraticCurve(p1, c, p2 mathgl.Vec2f) QuadraticCurve {
 	}
 }
 
-func MakeBezierCurve(x1, y1, x2, y2, x3, y3, x4, y4 int) BezierCurve {
+func MakeBezierCurve(p1, c1, c2, p2 image.Point) BezierCurve {
 	return BezierCurve{
-		Points: [4]image.Point{
-			image.Point{x1, y1},
-			image.Point{x2, y2},
-			image.Point{x3, y3},
-			image.Point{x4, y4},
-		},
+		Points: [4]image.Point{p1, c1, c2, p2},
 	}
 }
 
@@ -304,9 +343,15 @@ func (c BezierCurve) ToQuadratics() []QuadraticCurve {
 
 func (c BezierCurve) Draw(canv Canvas) {
 	gQuadraticDrawer.activate()
-	for _, quadc := range c.ToQuadratics() {
-		quadc.draw(canv)
+	quads := c.ToQuadratics()
+	if len(quads) < 1 {
+		panic("Something's wrong.")
 	}
+	path := NewPath().StartAt(quads[0].Points[0])
+	for _, quadc := range quads {
+		path.QuadraticTo(quadc.Points[2], quadc.Points[1])
+	}
+	path.draw(canv)
 }
 
 func ShaderFromFile(stype gl.GLenum, filename string) (shader glh.Shader) {
