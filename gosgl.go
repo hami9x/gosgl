@@ -15,24 +15,47 @@ import (
 	"github.com/phaikawl/poly2tri-go/p2t"
 )
 
+type DrawConfig interface {
+	Apply(*Drawer)
+}
+
 //Drawer represents a program and its buffers
 type Drawer struct {
 	program gl.Program
 	vao     gl.VertexArray
 	vbo     gl.Buffer
+	ebo     gl.Buffer
+
+	configs DrawConfig
+}
+
+type QuadraticDrawConfig struct {
+	excludeTrans bool
+}
+
+func (conf *QuadraticDrawConfig) Apply(dr *Drawer) {
+	loc := dr.program.GetUniformLocation("excludeTrans")
+	if loc != -1 {
+		if !conf.excludeTrans {
+			loc.Uniform1i(0)
+		} else {
+			loc.Uniform1i(1)
+		}
+	}
 }
 
 type Canvas struct {
 	W, H int
 }
 
-func MakeCanvas(w, h int) Canvas {
-	return Canvas{w, h}
+func MakeCanvas(w, h int) *Canvas {
+	return &Canvas{w, h}
 }
 
 var (
 	gQuadraticDrawer          *Drawer
 	gTriangleDrawer           *Drawer
+	gFillDrawer               *Drawer
 	gQuadraticApproxPrecision float32 = 10
 )
 
@@ -51,6 +74,9 @@ func NewDrawer(vshader, fshader string) *Drawer {
 	vbo := gl.GenBuffer()
 	vbo.Bind(gl.ARRAY_BUFFER)
 
+	ebo := gl.GenBuffer()
+	ebo.Bind(gl.ELEMENT_ARRAY_BUFFER)
+
 	vsh := ShaderFromFile(gl.VERTEX_SHADER, vshader)
 	fsh := ShaderFromFile(gl.FRAGMENT_SHADER, fshader)
 
@@ -62,11 +88,19 @@ func NewDrawer(vshader, fshader string) *Drawer {
 		program: program,
 		vao:     vao,
 		vbo:     vbo,
+		ebo:     ebo,
 	}
 }
 
 func newQuadraticDrawer() *Drawer {
-	dr := NewDrawer("vshader.glsl", "quadratic_fshader.glsl")
+	dr := newTexDrawer("vshader.glsl", "quadratic_fshader.glsl")
+
+	dr.configs = &QuadraticDrawConfig{false}
+	return dr
+}
+
+func newTexDrawer(vshader, fshader string) *Drawer {
+	dr := NewDrawer(vshader, fshader)
 	program := dr.program
 	posAttr := program.GetAttribLocation("position")
 	posAttr.AttribPointer(2, gl.FLOAT, false, 4*4, uintptr(0))
@@ -90,6 +124,10 @@ func newTriangleDrawer() *Drawer {
 	return dr
 }
 
+func newFillDrawer() *Drawer {
+	return newTexDrawer("vshader.glsl", "fill_fshader.glsl")
+}
+
 func (dr *Drawer) activate() {
 	dr.vao.Bind()
 	dr.vbo.Bind(gl.ARRAY_BUFFER)
@@ -99,6 +137,7 @@ func (dr *Drawer) activate() {
 func Init() {
 	gQuadraticDrawer = newQuadraticDrawer()
 	gTriangleDrawer = newTriangleDrawer()
+	gFillDrawer = newFillDrawer()
 
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 	gl.Enable(gl.BLEND)
@@ -115,10 +154,11 @@ type QuadraticCurve struct {
 
 type BezierCurve struct {
 	Points [4]image.Point
+	repr   *Path //Quadratics representation
 }
 
 type PathSegment interface {
-	Draw(Canvas)
+	Draw(*Canvas)
 }
 
 type Path struct {
@@ -161,17 +201,18 @@ func (p *Path) QuadraticTo(p2, c image.Point) *Path {
 }
 
 func (p *Path) BezierTo(p2, c1, c2 image.Point) *Path {
-	p.Segs.PushBack(MakeBezierCurve(
+	p.Segs.PushBack(NewBezierCurve(
 		p.EndPoint(),
 		c1, c2, p2))
 	p.NewEnd(p2)
 	return p
 }
 
-func fill(canv Canvas) {
-	gTriangleDrawer.activate()
+func fill(canv *Canvas, alphaTex *glh.Texture) {
+	gFillDrawer.activate()
 	gl.ColorMask(true, true, true, true)
-	gl.StencilFunc(gl.EQUAL, 1, 0xff)
+	gl.StencilMask(0x3)
+	gl.StencilFunc(gl.LESS, 0, 0xff)
 	w, h := canv.W, canv.H
 	p := canv.toGLPoints([]image.Point{
 		Pt(0, 0),
@@ -180,37 +221,53 @@ func fill(canv Canvas) {
 		Pt(0, h),
 	})
 	vertices := []float32{
-		p[0].X, p[0].Y,
-		p[1].X, p[1].Y,
-		p[3].X, p[3].Y,
+		p[0].X, p[0].Y, 0, 1,
+		p[1].X, p[1].Y, 1, 1,
+		p[2].X, p[2].Y, 1, 0,
+		p[3].X, p[3].Y, 0, 0,
 	}
 	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, vertices, gl.STATIC_DRAW)
-	gl.DrawArrays(gl.TRIANGLES, 0, 3)
 
-	vertices = []float32{
-		p[1].X, p[1].Y,
-		p[2].X, p[2].Y,
-		p[3].X, p[3].Y,
+	elements := []uint32{
+		0, 1, 2,
+		2, 3, 0,
 	}
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, vertices, gl.STATIC_DRAW)
-	gl.DrawArrays(gl.TRIANGLES, 0, 3)
+	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(elements)*4, elements, gl.STATIC_DRAW)
+	glh.With(alphaTex, func() {
+		gl.DrawElements(gl.TRIANGLES, 6, gl.UNSIGNED_INT, nil)
+	})
 }
 
-func (p *Path) Draw(canv Canvas) {
+func (p *Path) Draw(canv *Canvas) {
+	alphaBuffer := new(glh.Framebuffer)
+	alphaBuffer.Texture = glh.NewTexture(canv.W, canv.H)
+	alphaBuffer.Texture.Init()
+	glh.With(alphaBuffer, func() {
+		p.draw(canv, true)
+	})
+	gl.ColorMask(false, false, false, false)
+	quadConf := gQuadraticDrawer.configs.(*QuadraticDrawConfig)
 	gl.ClearStencil(0)
 	gl.Clear(gl.STENCIL_BUFFER_BIT)
-	gl.StencilMask(0x01)
+	gl.StencilMask(0x3)
 	gl.StencilFunc(gl.ALWAYS, 0, 0xff)
 	gl.StencilOp(gl.KEEP, gl.KEEP, gl.INVERT)
-	gl.ColorMask(false, false, false, false)
+	quadConf.excludeTrans = false
+	p.draw(canv, true)
+	gl.StencilMask(0x1)
+	quadConf.excludeTrans = true
+	p.draw(canv, true)
 
-	p.draw(canv)
-	fill(canv)
+	fill(canv, alphaBuffer.Texture)
 }
 
-func (p *Path) draw(canv Canvas) {
+func (p *Path) draw(canv *Canvas, fillGaps bool) {
 	for e := p.Segs.Front(); e != nil; e = e.Next() {
 		e.Value.(PathSegment).Draw(canv)
+	}
+
+	if !fillGaps {
+		return
 	}
 
 	if p.endPoints.Back().Value.(image.Point) == p.endPoints.Front().Value.(image.Point) {
@@ -222,6 +279,9 @@ func (p *Path) draw(canv Canvas) {
 	}
 
 	gTriangleDrawer.activate()
+
+	gl.BlendFunc(gl.ONE_MINUS_DST_ALPHA, gl.ZERO)
+	defer gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
 	pa := make(p2t.PointArray, 0, p.endPoints.Len())
 	for e := p.endPoints.Front(); e != nil; e = e.Next() {
@@ -262,21 +322,32 @@ func makeQuadraticCurve(p1, c, p2 mathgl.Vec2f) QuadraticCurve {
 	}
 }
 
-func MakeBezierCurve(p1, c1, c2, p2 image.Point) BezierCurve {
-	return BezierCurve{
+func NewBezierCurve(p1, c1, c2, p2 image.Point) (bc *BezierCurve) {
+	bc = &BezierCurve{
 		Points: [4]image.Point{p1, c1, c2, p2},
 	}
+	quads := bc.ToQuadratics()
+	if len(quads) < 1 {
+		panic("Something's wrong.")
+	}
+	path := NewPath().StartAt(quads[0].Points[0])
+	for _, quadc := range quads {
+		path.QuadraticTo(quadc.Points[2], quadc.Points[1])
+	}
+
+	bc.repr = path
+	return
 }
 
 type GLPoint struct {
 	X, Y float32
 }
 
-func (canv Canvas) toGLPoint(p image.Point) GLPoint {
+func (canv *Canvas) toGLPoint(p image.Point) GLPoint {
 	return GLPoint{float32(p.X) / float32(canv.W), float32(p.Y) / float32(canv.H)}
 }
 
-func (canv Canvas) toGLPoints(points []image.Point) []GLPoint {
+func (canv *Canvas) toGLPoints(points []image.Point) []GLPoint {
 	ps := make([]GLPoint, len(points))
 	for i, p := range points {
 		ps[i] = canv.toGLPoint(p)
@@ -284,7 +355,7 @@ func (canv Canvas) toGLPoints(points []image.Point) []GLPoint {
 	return ps
 }
 
-func (c QuadraticCurve) draw(canv Canvas) {
+func (c QuadraticCurve) draw(canv *Canvas) {
 	p := canv.toGLPoints(c.Points[:])
 	vertices := []float32{
 		p[0].X, p[0].Y, 0.0, 0.0,
@@ -295,8 +366,9 @@ func (c QuadraticCurve) draw(canv Canvas) {
 	gl.DrawArrays(gl.TRIANGLES, 0, 3)
 }
 
-func (c QuadraticCurve) Draw(canv Canvas) {
+func (c QuadraticCurve) Draw(canv *Canvas) {
 	gQuadraticDrawer.activate()
+	gQuadraticDrawer.configs.Apply(gQuadraticDrawer)
 	c.draw(canv)
 }
 
@@ -305,7 +377,7 @@ func Vectorf(p image.Point) (v mathgl.Vec2f) {
 	return v
 }
 
-func (c BezierCurve) quadApprox(p1, c1, c2, p2 mathgl.Vec2f) (v mathgl.Vec2f, ok bool) {
+func (c *BezierCurve) quadApprox(p1, c1, c2, p2 mathgl.Vec2f) (v mathgl.Vec2f, ok bool) {
 	//P2 - 3·C2 + 3·C1 - P1
 	d01 := p2.Sub(c2.Mul(3)).Add(c1.Mul(3)).Sub(p1).Len() / 2
 	if d01 <= gQuadraticApproxPrecision {
@@ -319,7 +391,7 @@ func mid(v1 mathgl.Vec2f, v2 mathgl.Vec2f) mathgl.Vec2f {
 	return v1.Add(v2).Mul(1 / 2.)
 }
 
-func (c BezierCurve) toQuadratics(p1, c1, c2, p2 mathgl.Vec2f) []QuadraticCurve {
+func (c *BezierCurve) toQuadratics(p1, c1, c2, p2 mathgl.Vec2f) []QuadraticCurve {
 	if newcp, ok := c.quadApprox(p1, c1, c2, p2); ok {
 		return []QuadraticCurve{makeQuadraticCurve(p1, newcp, p2)}
 	}
@@ -335,23 +407,15 @@ func (c BezierCurve) toQuadratics(p1, c1, c2, p2 mathgl.Vec2f) []QuadraticCurve 
 //ToQuadratics approximates a cubic bezier curve with quadratics.
 //Algorithm by Adrian Colomitchi at
 //http://www.caffeineowl.com/graphics/2d/vectorial/cubic2quad01.html
-func (c BezierCurve) ToQuadratics() []QuadraticCurve {
+func (c *BezierCurve) ToQuadratics() []QuadraticCurve {
 	p1, c1 := Vectorf(c.Points[0]), Vectorf(c.Points[1])
 	c2, p2 := Vectorf(c.Points[2]), Vectorf(c.Points[3])
 	return c.toQuadratics(p1, c1, c2, p2)
 }
 
-func (c BezierCurve) Draw(canv Canvas) {
+func (c *BezierCurve) Draw(canv *Canvas) {
 	gQuadraticDrawer.activate()
-	quads := c.ToQuadratics()
-	if len(quads) < 1 {
-		panic("Something's wrong.")
-	}
-	path := NewPath().StartAt(quads[0].Points[0])
-	for _, quadc := range quads {
-		path.QuadraticTo(quadc.Points[2], quadc.Points[1])
-	}
-	path.draw(canv)
+	c.repr.draw(canv, true)
 }
 
 func ShaderFromFile(stype gl.GLenum, filename string) (shader glh.Shader) {
