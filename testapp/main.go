@@ -44,7 +44,7 @@ func main() {
 
 		gl.ClearColor(1, 1, 1, 1)
 		gl.Clear(gl.COLOR_BUFFER_BIT)
-		pa.Draw(canv)
+		pa.DrawStroke(canv)
 		for !window.ShouldClose() {
 			//Do OpenGL stuff
 			window.SwapBuffers()
