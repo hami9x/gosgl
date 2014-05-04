@@ -20,5 +20,5 @@ I'm at phaikawl[at]gmail[dot]com.
 It's a Go project so building is straightforward, the only non-go dependencies are OpenGL and Glfw3.
 Their installation instructions are here:
 * [Go-gl](github.com/go-gl/gl)
-* [Go-glfw3](github.com/go-gl/glfw3)
+* [Go-glfw3](github.com/go-gl/glfw3)  
 After installing these, just `go get github.com/phaikawl/gosgl`.
