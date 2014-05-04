@@ -12,7 +12,7 @@ Here's a screenshot demoing the current stage of the project:
 
 It can already render smooth quadratic and cubic curves forming paths with antialiasing working, using a technique based on [Loop/Blinn] and some stencil magic. Talking about filling, these are the hardest to implement and they're working. It needs one more big thing to be basically usable: stroking. Stroking, especially dashed stroking involving curves is a difficult problem to solve. I found published papers by masterminds describing exactly the techniques to do these though, therefore it's not that far-fetched.  
     
-So I put my work here in the hope of finding someone, someone mathematically inclined to move it forward, become a real thing, it may create brand new world or not in what way you may imagine. I feel like I'm not intelligent enough or something, it's just hard to grasp the mathematics involved. Nevertheless, I learned a great deal while tinkering with all the stuff about graphics and OpenGl involved, acquired quite some knowledge and experience in the process, so I could help with the foundation.
+So I put my work here in the hope of finding someone, someone mathematically inclined to move it forward, become a real thing, it may create brand new world or not in what way you may imagine. I feel like I'm not intelligent enough or something, it's just hard to grasp the mathematics involved. Nevertheless, I learned a great deal while tinkering with all the stuff about graphics and OpenGL involved, acquired quite some knowledge and experience in the process, so I could help with the foundation.
 
 Drop me an email if you're interested. Would be a pleasure to work with you.
 I'm at phaikawl[at]gmail[dot]com.
