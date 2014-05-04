@@ -2,6 +2,7 @@
 in vec2 Texcoord;
 out vec4 outColor;
 uniform bool excludeTrans = false;
+uniform vec4 color;
 
 void main()
 {
@@ -13,12 +14,12 @@ void main()
    	float sd = (p.x*p.x - p.y)/sqrt(fx*fx + fy*fy);
    	float alpha = 0.5 - sd;
   	if (alpha >= 1)       // Inside  
-    		outColor = vec4(0.75, 0, 0, 1);
+    		outColor = color;
   	else if (alpha <= 0)  // Outside
    		discard;
   	else {
 		if (!excludeTrans) {
-			outColor = vec4(0.75, 0, 0, alpha);
+			outColor = vec4(color.xyz, color.a*alpha);
 		} else {
 			discard;
 		}

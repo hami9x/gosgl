@@ -4,8 +4,8 @@ package gosgl
 
 import (
 	"container/list"
+	"image/color"
 	"io/ioutil"
-	"math"
 	"path"
 	"runtime"
 
@@ -20,14 +20,104 @@ const (
 )
 
 var (
-	gQuadraticDrawer          *Drawer
-	gTriangleDrawer           *Drawer
-	gFillDrawer               *Drawer
 	gQuadraticApproxPrecision float64 = 10
+	gGl                       *OpenGL
 )
 
-type DrawConfig interface {
-	Apply(*Drawer)
+//Describe opengl state object
+type OpenGL struct {
+	QuadraticDrawer *GlDrawer
+	TriangleDrawer  *GlDrawer
+	FillDrawer      *GlDrawer
+	currentDrawer   *GlDrawer
+	configs         []drawConfig
+
+	QuadraticDrawConfig *QuadraticDrawConfig
+	GlColorConfig       *GlColorConfig
+}
+
+func (g *OpenGL) Activate(dr *GlDrawer) {
+	dr.Activate()
+	g.currentDrawer = dr
+
+	for _, config := range g.configs {
+		config.SetProgram(g.currentDrawer.program)
+		config.Apply()
+	}
+}
+
+func Init() {
+	gGl = OpenGLInit()
+}
+
+type GlColorConfig struct {
+	glProgramInfo
+	color color.Color
+}
+
+func (conf *GlColorConfig) SetColor(color color.Color) {
+	conf.color = color
+}
+
+func (conf *GlColorConfig) Apply() {
+	r, g, b, a := conf.color.RGBA()
+	rf, gf, bf, af := float32(r)/255, float32(g)/255, float32(b)/255, float32(a)/255
+	if conf.Program() == 0 {
+		panic("Program is nil!")
+	}
+	loc := conf.Program().GetUniformLocation("color")
+	loc.Uniform4f(rf, gf, bf, af)
+}
+
+func OpenGLInit() *OpenGL {
+	g := &OpenGL{
+		QuadraticDrawer: newQuadraticDrawer(),
+		TriangleDrawer:  newTriangleDrawer(),
+		FillDrawer:      newFillDrawer(),
+	}
+	g.QuadraticDrawConfig = &QuadraticDrawConfig{glProgramInfo{g.QuadraticDrawer.program}, false}
+	g.QuadraticDrawer.AddConfig(g.QuadraticDrawConfig)
+	g.GlColorConfig = &GlColorConfig{glProgramInfo{g.QuadraticDrawer.program}, color.RGBA{0, 0, 0, 1}}
+	g.configs = append(g.configs, g.GlColorConfig)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	gl.Enable(gl.BLEND)
+	gl.Enable(gl.STENCIL_TEST)
+	return g
+}
+
+type Paint struct {
+	fillColor color.Color
+}
+
+func NewPaint() *Paint {
+	return new(Paint)
+}
+
+func (p *Paint) SetFill(color color.Color) *Paint {
+	p.fillColor = color
+	return p
+}
+
+type Config interface {
+	Apply()
+}
+
+type drawConfig interface {
+	Config
+	Program() gl.Program
+	SetProgram(gl.Program)
+}
+
+type glProgramInfo struct {
+	program gl.Program
+}
+
+func (pi *glProgramInfo) SetProgram(p gl.Program) {
+	pi.program = p
+}
+
+func (pi *glProgramInfo) Program() gl.Program {
+	return pi.program
 }
 
 type Point struct {
@@ -37,6 +127,10 @@ type Point struct {
 
 func (pt Point) Add(pt2 Point) Point {
 	return ToPoint(pt.Mathgl().Add(pt2.Mathgl()))
+}
+
+func (pt Point) Mul(ratio float64) Point {
+	return ToPoint(pt.Mathgl().Mul(ratio))
 }
 
 func (pt Point) Sub(pt2 Point) Point {
@@ -87,24 +181,29 @@ func (r Rectangle) Dy() float64 {
 	return r.Max.Y - r.Min.Y
 }
 
-//Drawer represents a program and its buffers
-type Drawer struct {
+//GlDrawer represents an OpenGl program and shader, like an opengl draw mode
+type GlDrawer struct {
 	program gl.Program
 	vao     gl.VertexArray
 	vbo     gl.Buffer
 	ebo     gl.Buffer
 
-	configs DrawConfig
+	configs []drawConfig
 }
 
 type QuadraticDrawConfig struct {
-	excludeTrans bool
+	glProgramInfo
+	excludeTransluFrags bool //Exclude translucent (alpha != 0 && alpha != 1) fragments
 }
 
-func (conf *QuadraticDrawConfig) Apply(dr *Drawer) {
-	loc := dr.program.GetUniformLocation("excludeTrans")
+func (conf *QuadraticDrawConfig) SetExcludeTransluFrags(v bool) {
+	conf.excludeTransluFrags = v
+}
+
+func (conf *QuadraticDrawConfig) Apply() {
+	loc := conf.Program().GetUniformLocation("excludeTrans")
 	if loc != -1 {
-		if !conf.excludeTrans {
+		if !conf.excludeTransluFrags {
 			loc.Uniform1i(0)
 		} else {
 			loc.Uniform1i(1)
@@ -132,7 +231,7 @@ func iPt(x, y int) Point {
 	return Point{float64(x), float64(y)}
 }
 
-func NewDrawer(vshader, fshader string) *Drawer {
+func NewGlDrawer(vshader, fshader string) *GlDrawer {
 	vao := gl.GenVertexArray()
 	vao.Bind()
 
@@ -149,7 +248,7 @@ func NewDrawer(vshader, fshader string) *Drawer {
 	program.BindFragDataLocation(0, "outColor")
 	program.Use()
 
-	return &Drawer{
+	return &GlDrawer{
 		program: program,
 		vao:     vao,
 		vbo:     vbo,
@@ -157,15 +256,13 @@ func NewDrawer(vshader, fshader string) *Drawer {
 	}
 }
 
-func newQuadraticDrawer() *Drawer {
+func newQuadraticDrawer() *GlDrawer {
 	dr := newTexDrawer("vshader.glsl", "quadratic_fshader.glsl")
-
-	dr.configs = &QuadraticDrawConfig{false}
 	return dr
 }
 
-func newTexDrawer(vshader, fshader string) *Drawer {
-	dr := NewDrawer(vshader, fshader)
+func newTexDrawer(vshader, fshader string) *GlDrawer {
+	dr := NewGlDrawer(vshader, fshader)
 	program := dr.program
 	posAttr := program.GetAttribLocation("position")
 	posAttr.AttribPointer(2, gl.FLOAT, false, 4*4, uintptr(0))
@@ -179,8 +276,8 @@ func newTexDrawer(vshader, fshader string) *Drawer {
 	return dr
 }
 
-func newTriangleDrawer() *Drawer {
-	dr := NewDrawer("vshader.glsl", "triangle_fshader.glsl")
+func newTriangleDrawer() *GlDrawer {
+	dr := NewGlDrawer("vshader.glsl", "triangle_fshader.glsl")
 	program := dr.program
 	posAttr := program.GetAttribLocation("position")
 	posAttr.AttribPointer(2, gl.FLOAT, false, 2*4, uintptr(0))
@@ -189,24 +286,21 @@ func newTriangleDrawer() *Drawer {
 	return dr
 }
 
-func newFillDrawer() *Drawer {
+func newFillDrawer() *GlDrawer {
 	return newTexDrawer("vshader.glsl", "fill_fshader.glsl")
 }
 
-func (dr *Drawer) activate() {
+func (dr *GlDrawer) AddConfig(conf drawConfig) {
+	dr.configs = append(dr.configs, conf)
+}
+
+func (dr *GlDrawer) Activate() {
 	dr.vao.Bind()
 	dr.vbo.Bind(gl.ARRAY_BUFFER)
 	dr.program.Use()
-}
-
-func Init() {
-	gQuadraticDrawer = newQuadraticDrawer()
-	gTriangleDrawer = newTriangleDrawer()
-	gFillDrawer = newFillDrawer()
-
-	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-	gl.Enable(gl.BLEND)
-	gl.Enable(gl.STENCIL_TEST)
+	for _, config := range dr.configs {
+		config.Apply()
+	}
 }
 
 type QuadraticCurve struct {
@@ -267,7 +361,7 @@ func (p *Path) BezierTo(p2, c1, c2 Point) *Path {
 }
 
 func fill(op *DrawOp, alphaTex *glh.Texture) {
-	gFillDrawer.activate()
+	gGl.Activate(gGl.FillDrawer)
 	gl.ColorMask(true, true, true, true)
 	gl.StencilMask(0x3)
 	gl.StencilFunc(gl.LESS, 0, 0xff)
@@ -296,64 +390,54 @@ func fill(op *DrawOp, alphaTex *glh.Texture) {
 	})
 }
 
-func (p *Path) draw(op *DrawOp) {
-	alphaBuffer := new(glh.Framebuffer)
-	alphaBuffer.Texture = glh.NewTexture(op.Canvas.W, op.Canvas.H)
-	alphaBuffer.Texture.Init()
+func newTexBuffer(canv *Canvas) *glh.Framebuffer {
+	tx := new(glh.Framebuffer)
+	tx.Texture = glh.NewTexture(canv.W, canv.H)
+	tx.Texture.Init()
+	return tx
+}
+
+func (p *Path) draw(op *DrawOp, alphaBuffer *glh.Framebuffer, clrStencil bool) {
 	glh.With(alphaBuffer, func() {
 		p.glDraw(op)
 	})
 	gl.ColorMask(false, false, false, false)
-	quadConf := gQuadraticDrawer.configs.(*QuadraticDrawConfig)
-	gl.ClearStencil(0)
-	gl.Clear(gl.STENCIL_BUFFER_BIT)
+	if clrStencil {
+		gl.ClearStencil(0)
+		gl.Clear(gl.STENCIL_BUFFER_BIT)
+	}
 	gl.StencilMask(0x3)
 	gl.StencilFunc(gl.ALWAYS, 0, 0xff)
 	gl.StencilOp(gl.KEEP, gl.KEEP, gl.INVERT)
-	quadConf.excludeTrans = false
+	gGl.QuadraticDrawConfig.SetExcludeTransluFrags(false)
 	p.glDraw(op)
 	gl.StencilMask(0x1)
-	quadConf.excludeTrans = true
+	gGl.QuadraticDrawConfig.SetExcludeTransluFrags(true)
 	p.glDraw(op)
+}
 
+func (p *Path) DrawFill(canv *Canvas, paint *Paint) {
+	op := NewDrawOp(canv)
+	op.SetTransformationFunc(defaultTransFunc)
+	alphaBuffer := newTexBuffer(canv)
+	p.draw(op, alphaBuffer, true)
+	gGl.GlColorConfig.SetColor(paint.fillColor)
 	fill(op, alphaBuffer.Texture)
 }
 
-func (p *Path) DrawFill(canv *Canvas) {
-	op := NewDrawOp(canv)
-	op.SetTransformationFunc(defaultTransFunc)
-	p.draw(op)
-}
+//func (p *Path) BoundingBox() Rectangle {
+//	var minX, minY, maxX, maxY float64 = oo, oo, 0, 0
+//	for e := p.Segs.Front(); e != nil; e = e.Next() {
+//		for _, pt := range e.Value.(PathSegment).Points() {
+//			minX = math.Min(minX, pt.X)
+//			minY = math.Min(minY, pt.Y)
+//			maxX = math.Max(maxX, pt.X)
+//			maxY = math.Max(maxY, pt.Y)
+//		}
+//	}
 
-func (p *Path) DrawStroke(canv *Canvas) {
-	op := NewDrawOp(canv)
-	op.SetTransformationFunc(func(pt Point) Point {
-		bb := p.BoundingBox()
-		pivot := bb.Min.Add(Pt(bb.Dx()/2, bb.Dy()/2))
-		strokeWidth := 30
-		v := pt.Sub(pivot)
-		k := float64(strokeWidth) / math.Sqrt(math.Pow(float64(v.X), 2)+math.Pow(float64(v.Y), 2))
-		offset := Point{k * float64(v.X), k * float64(v.Y)}
-		pt = pt.Add(offset)
-		return pt
-		//return Pt(pt.X*2, pt.Y*2)
-	})
-	p.draw(op)
-}
-
-func (p *Path) BoundingBox() Rectangle {
-	var minX, minY, maxX, maxY float64 = oo, oo, 0, 0
-	for e := p.Segs.Front(); e != nil; e = e.Next() {
-		for _, pt := range e.Value.(PathSegment).Points() {
-			minX = math.Min(minX, pt.X)
-			minY = math.Min(minY, pt.Y)
-			maxX = math.Max(maxX, pt.X)
-			maxY = math.Max(maxY, pt.Y)
-		}
-	}
-
-	return Rectangle{Pt(minX, minY), Pt(maxX, maxY)}
-}
+//	return Rectangle{Pt(minX, minY), Pt(maxX, maxY)}
+//}
 
 func GetPt(pt *list.Element) Point {
 	return pt.Value.(Point)
@@ -373,7 +457,7 @@ func (p *Path) glDraw(op *DrawOp) {
 		return
 	}
 
-	gTriangleDrawer.activate()
+	gGl.Activate(gGl.TriangleDrawer)
 
 	gl.BlendFunc(gl.ONE_MINUS_DST_ALPHA, gl.ZERO)
 	defer gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
@@ -452,7 +536,6 @@ func (canv *Canvas) toGLPoints(points []Point) []GLPoint {
 
 func (c *QuadraticCurve) draw(op *DrawOp) {
 	p := op.Canvas.toGLPoints(op.transformAll(c.Points()))
-	//fmt.Printf("%v\n", op.transformAll(c.Points()))
 	vertices := []float32{
 		p[0].X, p[0].Y, 0.0, 0.0,
 		p[1].X, p[1].Y, 0.5, 0.0,
@@ -463,8 +546,7 @@ func (c *QuadraticCurve) draw(op *DrawOp) {
 }
 
 func (c *QuadraticCurve) Draw(op *DrawOp) {
-	gQuadraticDrawer.activate()
-	gQuadraticDrawer.configs.Apply(gQuadraticDrawer)
+	gGl.Activate(gGl.QuadraticDrawer)
 	c.draw(op)
 }
 
@@ -526,7 +608,7 @@ func (c *BezierCurve) Points() (l []Point) {
 }
 
 func (c *BezierCurve) Draw(op *DrawOp) {
-	gQuadraticDrawer.activate()
+	gGl.Activate(gGl.QuadraticDrawer)
 	c.repr.glDraw(op)
 }
 

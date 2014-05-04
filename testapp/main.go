@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
+	m "github.com/phaikawl/gomain"
+	"image/color"
 	"runtime"
 	"time"
-	m "github.com/phaikawl/gomain"
 
 	gl "github.com/go-gl/gl"
 	glfw "github.com/go-gl/glfw3"
@@ -44,7 +45,7 @@ func main() {
 
 		gl.ClearColor(1, 1, 1, 1)
 		gl.Clear(gl.COLOR_BUFFER_BIT)
-		pa.DrawStroke(canv)
+		pa.DrawFill(canv, sgl.NewPaint().SetFill(color.RGBA{0, 0, 191, 20}))
 		for !window.ShouldClose() {
 			//Do OpenGL stuff
 			window.SwapBuffers()
