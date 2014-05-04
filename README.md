@@ -8,7 +8,7 @@ Rendering vector-like graphics using shaders on the modern GPU pipeline is extre
 This project tries to implement a near pure Go graphics library using new resolution-independent techniques.
   
 Here's a screenshot demoing the current stage of the project:  
-![screenshot](http://s30.postimg.org/69fdlgj8x/image.png)
+![screenshot](http://s22.postimg.org/vbu6ub40h/Screenshot_from_2014_05_04_18_53_49.png)
 It can already render quadratic and cubic curves forming paths with antialiasing working, using a technique based on [Loop/Blinn] and some stencil magic. Talking about filling, these are the hardest to implement and they're working. It needs one more big thing to basically usable: stroking. Stroking, especially dashed stroking involving curves is a difficult problem to solve. I found published papers by masterminds describing exactly the techniques to do these though, therefore it's not that far-fetched.  
     
 So I put my work here in the hope of finding someone, I need someone mathematically inclined to move it forward, become a real thing, it may create brand new world or not in what way you may imagine. I feel like I'm not intelligent enough or something, it's just hard to grasp the mathematics involved. I learned a great deal while tinkering with all the stuff about graphics and OpenGl involved, acquired quite some knowledge and experience in the process, so I could help with the foundation.
