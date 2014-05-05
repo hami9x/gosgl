@@ -3,7 +3,7 @@ GosGL
   
 Modern OpenGL GPU-based resolution-independent graphics library. Written in Go.  
   
-Rendering vector-like graphics using shaders on the modern GPU pipeline is extremely efficient: hardware-accelerated, way faster, energy-saving and no heavy cpu computation is needed. This new wave of technology has been developed by multiple parties over the years and it's working now. Some major popular graphics library, namely Skia has already adopted the technique in the new accelerated version.  
+Rendering vector-like graphics using shaders on the modern GPU pipeline is extremely efficient: hardware-accelerated, way faster, energy-saving and no heavy cpu computation is needed. This new wave of technology has been developed by multiple parties over the years and it's working now. Some major popular graphics library, namely Skia has already adopted the technique in the new accelerated version. Nvidia also released an [API](https://developer.nvidia.com/nv-path-rendering) using this technique.
 
 This project tries to implement a near pure Go graphics library using new resolution-independent techniques.
   
