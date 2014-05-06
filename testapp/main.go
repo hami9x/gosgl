@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
-	m "github.com/phaikawl/gomain"
 	"image/color"
 	"runtime"
 	"time"
+	m "github.com/phaikawl/gomain"
 
 	gl "github.com/go-gl/gl"
 	glfw "github.com/go-gl/glfw3"
@@ -36,17 +36,16 @@ func main() {
 		window.MakeContextCurrent()
 		gl.Init()
 		sgl.Init()
-		canv := sgl.MakeCanvas(w, h)
+		canv := sgl.NewCanvas(w, h)
 		pa := sgl.NewPath().StartAt(sgl.Pt(50, 50))
 		pa.QuadraticTo(sgl.Pt(80, 50), sgl.Pt(150, 0))
 		pa.QuadraticTo(sgl.Pt(300, 300), sgl.Pt(800, 100))
 		pa.QuadraticTo(sgl.Pt(100, 600), sgl.Pt(0, 300))
 		pa.BezierTo(sgl.Pt(50, 50), sgl.Pt(-100, 200), sgl.Pt(100, 100))
-
-		gl.ClearColor(1, 1, 1, 1)
-		gl.Clear(gl.COLOR_BUFFER_BIT)
-		pa.DrawFill(canv, sgl.NewPaint().SetFill(color.RGBA{0, 0, 191, 20}))
 		for !window.ShouldClose() {
+			gl.ClearColor(1, 1, 1, 1)
+			gl.Clear(gl.COLOR_BUFFER_BIT)
+			pa.DrawFill(canv, sgl.NewPaint().SetFill(color.RGBA{89, 184, 239, 100}))
 			//Do OpenGL stuff
 			window.SwapBuffers()
 			glfw.PollEvents()

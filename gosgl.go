@@ -22,6 +22,7 @@ const (
 var (
 	gQuadraticApproxPrecision float64 = 10
 	gGl                       *OpenGL
+	Black                     = color.RGBA{0, 0, 0, 255}
 )
 
 //Describe opengl state object
@@ -59,12 +60,17 @@ func (conf *GlColorConfig) SetColor(color color.Color) {
 	conf.color = color
 }
 
+func (conf *GlColorConfig) Reset() {
+	conf.color = Black
+}
+
 func (conf *GlColorConfig) Apply() {
 	r, g, b, a := conf.color.RGBA()
-	rf, gf, bf, af := float32(r)/255, float32(g)/255, float32(b)/255, float32(a)/255
+	rf, gf, bf, af := float32(r)/65535., float32(g)/65535., float32(b)/65535., float32(a)/65535.
 	if conf.Program() == 0 {
 		panic("Program is nil!")
 	}
+
 	loc := conf.Program().GetUniformLocation("color")
 	loc.Uniform4f(rf, gf, bf, af)
 }
@@ -79,6 +85,7 @@ func OpenGLInit() *OpenGL {
 	g.QuadraticDrawer.AddConfig(g.QuadraticDrawConfig)
 	g.GlColorConfig = &GlColorConfig{glProgramInfo{g.QuadraticDrawer.program}, color.RGBA{0, 0, 0, 1}}
 	g.configs = append(g.configs, g.GlColorConfig)
+	g.GlColorConfig.SetColor(Black)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 	gl.Enable(gl.BLEND)
 	gl.Enable(gl.STENCIL_TEST)
@@ -138,31 +145,31 @@ func (pt Point) Sub(pt2 Point) Point {
 	return Point{vt[0], vt[1]}
 }
 
-type TransFunc func(Point) Point
+//type TransFunc func(Point) Point
 
-//DrawOp is Draw Operation
-type DrawOp struct {
-	Canvas    *Canvas
-	transform TransFunc //Transformation function
-}
+////DrawOp is Draw Operation
+//type DrawOp struct {
+//	Canvas    *Canvas
+//	transform TransFunc //Transformation function
+//}
 
-func defaultTransFunc(pt Point) Point { return pt }
+//func defaultTransFunc(pt Point) Point { return pt }
 
-func NewDrawOp(canv *Canvas) *DrawOp {
-	return &DrawOp{canv, defaultTransFunc}
-}
+//func NewDrawOp(canv *Canvas) *DrawOp {
+//	return &DrawOp{canv, defaultTransFunc}
+//}
 
-func (op *DrawOp) SetTransformationFunc(f TransFunc) {
-	op.transform = f
-}
+//func (op *DrawOp) SetTransformationFunc(f TransFunc) {
+//	op.transform = f
+//}
 
-func (op *DrawOp) transformAll(pts []Point) []Point {
-	r := make([]Point, len(pts))
-	for i, pt := range pts {
-		r[i] = op.transform(pt)
-	}
-	return r
-}
+//func (op *DrawOp) transformAll(pts []Point) []Point {
+//	r := make([]Point, len(pts))
+//	for i, pt := range pts {
+//		r[i] = op.transform(pt)
+//	}
+//	return r
+//}
 
 func (p Point) Mathgl() mathgl.Vec2d {
 	return mathgl.Vec2d{p.X, p.Y}
@@ -212,11 +219,15 @@ func (conf *QuadraticDrawConfig) Apply() {
 }
 
 type Canvas struct {
-	W, H int
+	W, H   int
+	buffer *glh.Framebuffer
 }
 
-func MakeCanvas(w, h int) *Canvas {
-	return &Canvas{w, h}
+func NewCanvas(w, h int) *Canvas {
+	buffer := new(glh.Framebuffer)
+	buffer.Texture = glh.NewTexture(w, h)
+	buffer.Texture.Init()
+	return &Canvas{w, h, buffer}
 }
 
 func lastPt(l []Point) Point {
@@ -313,7 +324,7 @@ type BezierCurve struct {
 }
 
 type PathSegment interface {
-	Draw(*DrawOp)
+	Draw(*Canvas)
 	Points() []Point //May be unnecessary
 }
 
@@ -360,13 +371,15 @@ func (p *Path) BezierTo(p2, c1, c2 Point) *Path {
 	return p
 }
 
-func fill(op *DrawOp, alphaTex *glh.Texture) {
+func fill(canv *Canvas, alphaTex *glh.Texture, paint *Paint) {
+	gGl.GlColorConfig.SetColor(paint.fillColor)
+	defer gGl.GlColorConfig.Reset()
 	gGl.Activate(gGl.FillDrawer)
 	gl.ColorMask(true, true, true, true)
 	gl.StencilMask(0x3)
 	gl.StencilFunc(gl.LESS, 0, 0xff)
-	w, h := op.Canvas.W, op.Canvas.H
-	p := op.Canvas.toGLPoints([]Point{
+	w, h := canv.W, canv.H
+	p := canv.toGLPoints([]Point{
 		iPt(0, 0),
 		iPt(w, 0),
 		iPt(w, h),
@@ -385,67 +398,47 @@ func fill(op *DrawOp, alphaTex *glh.Texture) {
 		2, 3, 0,
 	}
 	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(elements)*4, elements, gl.STATIC_DRAW)
+
 	glh.With(alphaTex, func() {
 		gl.DrawElements(gl.TRIANGLES, 6, gl.UNSIGNED_INT, nil)
 	})
 }
 
-func newTexBuffer(canv *Canvas) *glh.Framebuffer {
-	tx := new(glh.Framebuffer)
-	tx.Texture = glh.NewTexture(canv.W, canv.H)
-	tx.Texture.Init()
-	return tx
-}
-
-func (p *Path) draw(op *DrawOp, alphaBuffer *glh.Framebuffer, clrStencil bool) {
+func (p *Path) draw(canv *Canvas, alphaBuffer *glh.Framebuffer, clrStencil bool) {
+	gGl.QuadraticDrawConfig.SetExcludeTransluFrags(false)
 	glh.With(alphaBuffer, func() {
-		p.glDraw(op)
+		gl.ClearColor(0, 0, 0, 0)
+		gl.Clear(gl.COLOR_BUFFER_BIT)
+		p.glDraw(canv)
 	})
-	gl.ColorMask(false, false, false, false)
 	if clrStencil {
-		gl.ClearStencil(0)
+		gl.StencilMask(0x3)
+		gl.ClearStencil(0x0)
 		gl.Clear(gl.STENCIL_BUFFER_BIT)
 	}
+	gl.ColorMask(false, false, false, false)
 	gl.StencilMask(0x3)
 	gl.StencilFunc(gl.ALWAYS, 0, 0xff)
 	gl.StencilOp(gl.KEEP, gl.KEEP, gl.INVERT)
-	gGl.QuadraticDrawConfig.SetExcludeTransluFrags(false)
-	p.glDraw(op)
+	p.glDraw(canv)
 	gl.StencilMask(0x1)
 	gGl.QuadraticDrawConfig.SetExcludeTransluFrags(true)
-	p.glDraw(op)
+	p.glDraw(canv)
 }
 
 func (p *Path) DrawFill(canv *Canvas, paint *Paint) {
-	op := NewDrawOp(canv)
-	op.SetTransformationFunc(defaultTransFunc)
-	alphaBuffer := newTexBuffer(canv)
-	p.draw(op, alphaBuffer, true)
-	gGl.GlColorConfig.SetColor(paint.fillColor)
-	fill(op, alphaBuffer.Texture)
+	alphaBuffer := canv.buffer
+	p.draw(canv, alphaBuffer, true)
+	fill(canv, alphaBuffer.Texture, paint)
 }
-
-//func (p *Path) BoundingBox() Rectangle {
-//	var minX, minY, maxX, maxY float64 = oo, oo, 0, 0
-//	for e := p.Segs.Front(); e != nil; e = e.Next() {
-//		for _, pt := range e.Value.(PathSegment).Points() {
-//			minX = math.Min(minX, pt.X)
-//			minY = math.Min(minY, pt.Y)
-//			maxX = math.Max(maxX, pt.X)
-//			maxY = math.Max(maxY, pt.Y)
-//		}
-//	}
-
-//	return Rectangle{Pt(minX, minY), Pt(maxX, maxY)}
-//}
 
 func GetPt(pt *list.Element) Point {
 	return pt.Value.(Point)
 }
 
-func (p *Path) glDraw(op *DrawOp) {
+func (p *Path) glDraw(canv *Canvas) {
 	for e := p.Segs.Front(); e != nil; e = e.Next() {
-		e.Value.(PathSegment).Draw(op)
+		e.Value.(PathSegment).Draw(canv)
 	}
 
 	if GetPt(p.endPoints.Back()).Mathgl().ApproxEqual(
@@ -464,7 +457,7 @@ func (p *Path) glDraw(op *DrawOp) {
 
 	pa := make(p2t.PointArray, 0, p.endPoints.Len())
 	for e := p.endPoints.Front(); e != nil; e = e.Next() {
-		p := op.transform(GetPt(e))
+		p := GetPt(e)
 		pa = append(pa, &p2t.Point{X: float64(p.X), Y: float64(p.Y)})
 	}
 	p2t.Init(pa)
@@ -472,7 +465,7 @@ func (p *Path) glDraw(op *DrawOp) {
 	vertices := make([]float32, 6, 6)
 	for _, tri := range triArr {
 		for i, triPt := range tri.Point {
-			pt := op.Canvas.toGLPoint(Pt(triPt.X, triPt.Y))
+			pt := canv.toGLPoint(Pt(triPt.X, triPt.Y))
 			vertices[i*2] = pt.X
 			vertices[i*2+1] = pt.Y
 		}
@@ -534,8 +527,8 @@ func (canv *Canvas) toGLPoints(points []Point) []GLPoint {
 	return ps
 }
 
-func (c *QuadraticCurve) draw(op *DrawOp) {
-	p := op.Canvas.toGLPoints(op.transformAll(c.Points()))
+func (c *QuadraticCurve) draw(canv *Canvas) {
+	p := canv.toGLPoints(c.Points())
 	vertices := []float32{
 		p[0].X, p[0].Y, 0.0, 0.0,
 		p[1].X, p[1].Y, 0.5, 0.0,
@@ -545,9 +538,9 @@ func (c *QuadraticCurve) draw(op *DrawOp) {
 	gl.DrawArrays(gl.TRIANGLES, 0, 3)
 }
 
-func (c *QuadraticCurve) Draw(op *DrawOp) {
+func (c *QuadraticCurve) Draw(canv *Canvas) {
 	gGl.Activate(gGl.QuadraticDrawer)
-	c.draw(op)
+	c.draw(canv)
 }
 
 func (c *QuadraticCurve) Points() []Point {
@@ -607,9 +600,9 @@ func (c *BezierCurve) Points() (l []Point) {
 	return
 }
 
-func (c *BezierCurve) Draw(op *DrawOp) {
+func (c *BezierCurve) Draw(canv *Canvas) {
 	gGl.Activate(gGl.QuadraticDrawer)
-	c.repr.glDraw(op)
+	c.repr.glDraw(canv)
 }
 
 func ShaderFromFile(stype gl.GLenum, filename string) (shader glh.Shader) {
