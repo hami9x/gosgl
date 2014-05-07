@@ -17,7 +17,7 @@ So I put my work here in the hope of finding someone, someone mathematically inc
 Drop me an email if you're interested. Would be a pleasure to work with you.
 I'm at phaikawl[at]gmail[dot]com.
 
-Discussions go here: [google group](https://groups.google.com/forum/#!forum/gosgl-dev)
+Questions? Ideas? Come here: [google group](https://groups.google.com/forum/#!forum/gosgl-dev)
 
 #Building
 It's a Go project so building is straightforward, the only non-go dependencies are OpenGL and Glfw3.
